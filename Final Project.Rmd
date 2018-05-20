@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-Link to the project in RPubs: http://rpubs.com/ofomicheva86/379258
+Link to the project in RPubs: http://rpubs.com/ofomicheva86/390683
 
 ```{r, message=FALSE,warning=FALSE}
 
@@ -161,8 +161,8 @@ Create additional variables based on existing variables.
 #split the variable 'Name' into 'First_Name', 'Last Name' and 'Salutation'
 data <- data %>% separate(Name, c("Last_Name", "name"), sep = "\\,\\s+", na.rm=T)  %>% separate(name, c("Salutation", "First_Name"), sep = "\\.\\s+", na.rm=T) 
 
-#split the variable 'Cabin' into 'Cabin floor' and "Cabin section"
-data <- data %>% mutate(Cabin2=Cabin)  %>% separate(Cabin, c("Floor", "x"), sep = "[:digit:]", na.rm=T) %>% separate(Cabin2, c("Cabin2", "Room"), sep = "[:alpha:]", na.rm=T) %>% dplyr::select(-x, -Cabin2) 
+#split the variable 'Cabin' into 'Floor' and "Room"
+data <- data %>% mutate(Cabin2=Cabin)  %>% separate(Cabin, c("Floor", "Cabin"), sep = "[:digit:]", na.rm=T) %>% separate(Cabin2, c("Cabin2", "Room"), sep = "[:alpha:]", na.rm=T) %>% dplyr::select(-Cabin, -Cabin2) 
 
 head(data)
 colnames(data)
@@ -228,7 +228,7 @@ include <- setdiff(names(data), exclude)
 data_include <- data[include]
 
 #imputation with mean
-imp.data <- mice(data_include, m=20, method='pmm', printFlag=FALSE)
+imp.data <- mice(data_include, m=20, method='cart', printFlag=FALSE)
 
 #merge imputed values with data frame
 data <- complete(imp.data)
@@ -279,14 +279,6 @@ corrplot(cor(data[4:length(data)] %>% select_if(is.numeric)), type = "upper", me
 Assumption 4 - Logistic regression assumes linearity of independent variables and log odds.
 
 I tested linearity in the logit by running Box-Tidwell Transformation Test. I added to the logistic model interaction terms which are the crossproduct of each independent times its natural logarithm ( (X)ln(X)] ). If these terms are significant, then there is non-linearity in the logit.
-
-I stated the following hypothesis:
-
-The null hypothesis: Odds ration is linear with an independent variable. No transformation is needed. The alternative hypothesis: Odds ration is not linear with an independent variable. Transformation is needed.
-
-The null hypothesis is rejected only for total accounts (total_acc) variable which p-values is less than significance level of 5%. Hence transformation is needed for the variable “total_acc”.
-
-All other variables have p-values that are greater than significance level of 5%. So, no transformation is needed.
            
 ```{r}
 
@@ -325,6 +317,7 @@ model <- glm(formula = Survived ~ ., family = binomial(link = "logit"),
 summary(model)
 
 ```
+
 Create a dummy variables
 
 ```{r}
@@ -338,7 +331,7 @@ data$Pclass_Upper <- ifelse(data$Pclass == "Upper",1,0)
 
 4. SELECT MODELS
 
-Use stepwise approach to built the model.
+Use stepwise approach to build the model.
 
 ```{r}
 
@@ -435,7 +428,7 @@ data = within(data, {
 Calculate Classification Metrics.
 
 ```{r}
-data
+
 #create confusion matrix
 confusion_matrix <- table("Predicted" = data$Survived_pred, "Actual" = data$Survived)
 confusion_matrix
