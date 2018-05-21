@@ -1,0 +1,686 @@
+---
+title: "Final Project"
+author: "Olya Fomicheva"
+date: "5/18/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Link to the project in RPubs: http://rpubs.com/ofomicheva86/390683
+
+```{r, message=FALSE,warning=FALSE}
+
+#required packages
+library(rcompanion)
+library(corrplot)
+library(PerformanceAnalytics)
+library(GGally)
+library(RColorBrewer)
+library(VIM)
+library(dplyr)
+library(tidyr)
+library(mice)
+library(pROC)
+library(caret)
+library(pscl)
+library(ResourceSelection)
+library(car)
+library(speedglm)
+library(gdata)
+
+```
+
+1.DATA EXPLORATION 
+
+The dataset contains the variables described below:
+
+1. 'Survived'- survival	(0 = No, 1 = Yes)
+2. 'Pclass'	- ticket class	(1 = 1st, 2 = 2nd, 3 = 3rd)
+3. 'Sex' -	sex	
+4. 'Age' -	age in years	
+5. 'Sibsp'	- number of siblings / spouses aboard the Titanic	
+6. 'Parch'	- number of parents / children aboard the Titanic	
+7. 'Ticket' -	ticket number	
+8. 'Fare' -	passenger fare	
+9. 'Cabin' - cabin number	
+10. 'Embarked' -	port of embarkation	(C = Cherbourg, Q = Queenstown, S = Southampton)
+
+Read training and testing datasets
+
+```{r}
+
+#read training data set
+#replace blanks with NAs
+data <- read.csv(file=
+"https://raw.githubusercontent.com/olga0503/DATA-621/master/titanic_train.csv",
+header=T, na.strings=c("","NA"))
+
+#read testing data set
+data_testing <- read.csv(file=
+"https://raw.githubusercontent.com/olga0503/DATA-621/master/titanic_test.csv",
+header=T, na.strings=c("","NA"))
+
+#display first six entries
+head(data)
+
+#find dimentions
+dim(data)
+
+```
+
+Count missing values.
+
+```{r}
+
+#chart for missing values
+aggr(data[-1], prop = T, numbers = T, cex.axis=.8, 
+     ylab=c("Proportion of missingness","Missingness Pattern"),
+     labels=names(data[-1]))
+
+#build function that counts missing values
+count_nas <- function(data){
+  
+variable_name_column <- c()
+number_missing_column <- c()
+
+for (i in 2:ncol(data)){
+  variable_name <- colnames(data[i])
+  number_missing <- sum(is.na(data[i]))
+  variable_name_column <- c(variable_name_column,variable_name)
+  number_missing_column <- c(number_missing_column,number_missing)
+}
+
+missing_table <- data.frame(variable_name_column,number_missing_column)
+missing_table <- missing_table %>% mutate(percentage=round(number_missing_column*100/nrow(data),2)) %>% arrange(desc(percentage))
+missing_table
+}
+
+#build function that counts negative values
+count_neg <- function(data){
+  
+variable_name_column <- c()
+number_negative_column <- c()  
+
+
+for (i in 3:ncol(data)){
+  neg_count <- 0
+  variable_name <- colnames(data[i])
+  for (j in 1:nrow(data)){
+    if(is.numeric(data[j,i]) && !is.na(data[j,i]) && data[j,i] < 0) {
+      neg_count <- neg_count + 1
+    }
+    }
+    number_negative_column <- c(number_negative_column,neg_count)
+    variable_name_column  <- c(variable_name_column,variable_name) 
+  }
+
+
+negative_table <- data.frame(variable_name_column,number_negative_column)
+negative_table <- negative_table %>% mutate(percentage=round(number_negative_column*100/nrow(data),2)) %>% arrange(desc(percentage))
+negative_table
+}
+
+#build function that counts 0s
+count_zeros <- function(data){
+  
+variable_name_column <- c()
+number_zero_column <- c()  
+
+
+for (i in 3:ncol(data)){
+  zero_count <- 0
+  variable_name <- colnames(data[i])
+  for (j in 1:nrow(data)){
+    if(is.numeric(data[j,i]) && !is.na(data[j,i]) && data[j,i] == 0) {
+      zero_count <- zero_count + 1
+    }
+    }
+    number_zero_column <- c(number_zero_column,zero_count)
+    variable_name_column  <- c(variable_name_column,variable_name) 
+  }
+
+
+zero_table <- data.frame(variable_name_column,number_zero_column)
+zero_table <- zero_table %>% mutate(percentage=round(number_zero_column*100/nrow(data),2)) %>% arrange(desc(percentage))
+zero_table
+}
+
+#count NAs
+count_nas(data)
+
+```
+
+2. DATA PREPARATION
+
+Create additional variables based on existing variables.
+
+```{r}
+
+#split the variable 'Name' into 'First_Name', 'Last Name' and 'Salutation'
+data <- data %>% separate(Name, c("Last_Name", "name"), sep = "\\,\\s+", na.rm=T)  %>% separate(name, c("Salutation", "First_Name"), sep = "\\.\\s+", na.rm=T) 
+
+#split the variable 'Cabin' into 'Floor' and "Room"
+data <- data %>% mutate(Cabin2=Cabin)  %>% separate(Cabin, c("Floor", "Cabin"), sep = "[:digit:]", na.rm=T) %>% separate(Cabin2, c("Cabin2", "Room"), sep = "[:alpha:]", na.rm=T) %>% dplyr::select(-Cabin, -Cabin2) 
+
+head(data)
+colnames(data)
+
+
+```
+
+Convert variables to proper formats.
+
+```{r}
+
+#convert 'Survived',Pclass' and 'Salutation' to factor and 'Cabin section' to integer
+data <- data %>% mutate(Survived = as.factor(Survived), 
+                        Pclass = as.factor(Pclass),
+                        Salutation = as.factor(Salutation),
+                        Room = as.integer(Room),
+                        Ticket = as.character(Ticket))
+
+#for 'Pclass' assign the values  'Upper', 'Middle', 'Lower' to '1','2' and '3' respectevly.
+data <- data %>% mutate(Pclass=factor(ifelse(Pclass=="1","Upper",ifelse(Pclass=="2","Middle",ifelse(Pclass=="3","Lower",Pclass)))))
+
+#for 'Embarked' assign the values  'Cherbourg', 'Queenstown', 'Southampton' to 'C','Q' and 'S' respectevly.
+data <- data %>% mutate(Embarked=factor(ifelse(Embarked=="C","Cherbourg",ifelse(Embarked=="Q","Queenstown",ifelse(Embarked=="S","Southampton",Embarked))))) 
+
+#display first six records
+head(data)
+
+```
+
+Analyze whether missing values in Cabin are predictive of survival outcome
+
+```{r}
+
+#for 'Cabin floor' replace NAs with "NONE"
+data <- data %>% mutate(Floor = factor(ifelse(is.na(Floor),"NONE",Floor))) 
+
+#for 'Cabin section' replace NAs with "NONE"
+data <- data %>% mutate(Room = as.integer(ifelse(is.na(Room),"0",Room)))
+
+head(data)
+
+#create mosaic plot for 'Cabin floor'
+count <- table(data$Survived, data$Floor)
+mosaicplot(count, main = "Distribution of 'Survived'",
+           xlab = "Survived",
+           ylab = "Cabin",
+           las = 1,
+           border = "black",
+           shade = TRUE
+           )
+
+```
+
+Apply multiple imputation.
+
+```{r}
+
+#apply multiple imputation for training data set
+#exclude variable 'PassengerId' and 'Survived'
+exclude <- c('PassengerId','Survived')
+data_no_missing_variables <- data %>% dplyr::select(-Age,-Embarked)
+include <- setdiff(names(data), exclude)
+data_include <- data[include]
+
+#imputation with mean
+imp.data <- mice(data_include, m=20, method='cart', printFlag=FALSE)
+
+#merge imputed values with data frame
+data <- mice::complete(imp.data)
+data <- data.frame(data_no_missing_variables,data %>% dplyr::select(Age,Embarked))
+head(data)
+
+
+#confirm no NAs
+count_nas(data)
+
+```
+
+Variables Analysis:
+
+1. Variable 'Survived'.
+
+It's response variable that defines chance of survival.  It belongs to binary type as it can take only "Yes" or "No".
+
+```{r}
+
+
+
+```
+
+2. Variable 'Pclass'.
+
+```{r}
+
+#mosaic plot
+count <- table(data$Pclass, data$Survived)
+mosaicplot(count, main = "Pclass vs Survived",
+           xlab = "Pclass",
+           ylab = "Survived",
+           las = 1,
+           border = "black",
+           shade = TRUE
+           )
+
+```
+
+3. Variable 'Sex'.	
+
+```{r}
+
+#mosaic plot
+count <- table(data$Sex, data$Survived)
+mosaicplot(count, main = "Sex vs Survived",
+           xlab = "Sex",
+           ylab = "Survived",
+           las = 1,
+           border = "black",
+           shade = TRUE
+           )
+
+```
+
+4. Variable 'Age'.
+
+It defines age in years.	
+
+```{r}
+
+boxplot(data$Age)
+
+par(mfrow=c(1,2))
+plotNormalHistogram(data$Age,main="Age")
+qqnorm(data$Age)
+qqline(data$Age)
+
+```
+
+5. 'SibSp'	- number of siblings / spouses aboard the Titanic	
+
+```{r}
+
+boxplot(data$SibSp)
+
+par(mfrow=c(1,2))
+plotNormalHistogram(data$SibSp,main="SibSp")
+qqnorm(data$SibSp)
+qqline(data$SibSp)
+
+```
+
+6. 'Parch'	- number of parents / children aboard the Titanic	
+
+```{r}
+
+boxplot(data$Parch)
+
+par(mfrow=c(1,2))
+plotNormalHistogram(data$Parch,main="Parch")
+qqnorm(data$Parch)
+qqline(data$Parch)
+
+```
+
+7. 'Ticket' -	ticket number	
+
+```{r}
+
+
+```
+
+8. 'Fare' -	passenger fare	
+
+```{r}
+
+boxplot(data$Fare)
+
+par(mfrow=c(1,2))
+plotNormalHistogram(data$Fare,main="Fare")
+qqnorm(data$Fare)
+qqline(data$Fare)
+
+```
+
+9. 'Cabin' - cabin number	
+
+The variable cabin was split by two other variables - 'Flooor' and 'Room'.
+
+```{r}
+
+#floor
+count <- table(data$Floor, data$Survived)
+mosaicplot(count, main = "Floor vs Survived",
+           xlab = "Floor",
+           ylab = "Survived",
+           las = 1,
+           border = "black",
+           shade = TRUE
+           )
+
+#room
+boxplot(data$Room)
+
+par(mfrow=c(1,2))
+plotNormalHistogram(data$Room,main="Room")
+qqnorm(data$Room)
+qqline(data$Room)
+
+```
+
+10. 'Embarked' -	port of embarkation	(C = Cherbourg, Q = Queenstown, S = Southampton)
+
+```{r}
+
+#mosaic plot
+count <- table(data$Embarked, data$Survived)
+mosaicplot(count, main = "Embarked vs Survived",
+           xlab = "Embarked",
+           ylab = "Survived",
+           las = 1,
+           border = "black",
+           shade = TRUE
+           )
+
+```
+
+3. BUILD MODELS
+
+The assumptions for the logistic regression are:
+
+Assumption 1 - Logistic regression typically requires a large sample size. It requires a minimum of 10 cases with the least frequent outcome for each independent variable in the model. For example, if a model has 5 independent variables and the expected probability of the least frequent outcome is .10, then the minimum sample size is 500 (10*5 / .10).
+
+```{r}
+
+dim(data)
+
+```
+
+The data set that contains 891 observations can be considered as a large data set.
+
+First, binary logistic regression requires the dependent variable to be binary.
+
+```{r}
+
+levels(factor(data$Survived))
+
+```
+
+Assumption 2 - Logistic regression requires the observations to be independent of each other. I assume that majority of the observations are independent since most of the passengers are not related.
+
+Assumption 3 - Logistic regression requires there to be little or no multicollinearity among the independent variables. This means that the independent variables should not be too highly correlated with each other.
+
+```{r}
+
+#correlation between variables
+corrplot(cor(data[2:length(data)] %>% select_if(is.numeric)), type = "upper", method = "number", tl.cex = 0.5, tl.col="black",number.cex = .5)
+
+```
+
+Assumption 4 - Logistic regression assumes linearity of independent variables and log odds.
+
+I tested linearity in the logit by running Box-Tidwell Transformation Test. I added to the logistic model interaction terms which are the crossproduct of each independent times its natural logarithm ( (X)ln(X)] ). If these terms are significant, then there is non-linearity in the logit.
+           
+```{r}
+
+#count negative values and 0s
+count_neg(data)
+count_zeros(data)
+
+#solve problem with 0s as Box Tidwell test doesn't accept 0s
+data <- data %>% mutate(Fare = Fare + 0.001,Room = Room + 0.001, Parch = Parch + 0.001, SibSp = SibSp + 0.001)
+
+```  
+
+```{r, warning=FALSE}
+
+#run Box Tidwell test
+BT_Fare <- boxTidwell(Survived ~ Fare,data = data)
+power_Fare <- BT_Fare$result[,"MLE of lambda"]
+BT_Age <- boxTidwell(Survived ~ Age,data = data)
+power_Age <- BT_Age$result[,"MLE of lambda"]
+BT_SibSp <- boxTidwell(Survived ~ SibSp,data = data)
+power_SibSp <- BT_SibSp$result[,"MLE of lambda"]
+#BT_Parch <- boxTidwell(Survived ~ Parch,data = data)
+#power_Parch <- BT_Parch$result[,"MLE of lambda"]
+#BT_Floor <- boxTidwell(Survived ~ Floor,data = data)
+#power_Floor <- BT_Floor$result[,"MLE of lambda"]
+
+#modify variables
+data <- data %>% mutate(Age = Age^power_Age,Fare = Fare^power_Fare,SibSp=SibSp^power_SibSp)
+
+```  
+
+
+```{r}
+
+#remove variables First Name, Last Name and Ticket from dataset
+data <- data %>% dplyr::select(-First_Name,-Last_Name,-Ticket)
+
+#run regression model that includes all independent variables
+model <- glm(formula = Survived ~ ., family = binomial(link = "logit"),
+             data = data)
+summary(model)
+
+```
+
+Create a dummy variables
+
+```{r}
+
+#create a dummy variables for Pclass="Middle"
+data$Pclass_Middle <- ifelse(data$Pclass == "Middle",1,0)
+data$Pclass_Upper <- ifelse(data$Pclass == "Upper",1,0)
+
+```
+
+
+4. SELECT MODELS
+
+Use stepwise approach to build the model.
+
+The best three regression models were built based on the stepwise approach that analyses all combination of variables and selects the best regression model based on lowest AIC (Akaike’s criterion) value. Lower values of AIC indicate the preferred model, that is, the one with the fewest parameters that still provides an adequate fit to the data.  The step function ignored redundant variables (the variables that are highly correlated).
+
+```{r}
+
+#build glm model using stepwise approach
+model.null = glm(Survived ~ 1, 
+                 data = data,
+                 family = binomial(link="logit")
+                 )
+
+model.full = glm(Survived ~ .,
+                 data = data,
+                 family = binomial(link="logit")
+                 )
+     
+step(model.null,
+     scope = list(upper=model.full),
+             direction = "both",
+             test = "Chisq",
+             data = data)
+
+```
+
+Test Goodness of Fit.
+
+Deviance analysis, Likelihood Ratio Test, Pseudo R^2 Test and Hosmer-Lemeshow Test were performed to test goodness of fit of the regression.
+
+a. Likelihood Ratio Test.
+
+A logistic regression is said to provide a better fit to the data if it demonstrates an improvement over a model with fewer predictors. This is performed using the likelihood ratio test, which compares the likelihood of the data under the full model (Model #1) against the likelihood of the data under a model with fewer predictors (Model #3). Removing predictor variables from a model will almost always make the model fit less well, but it is necessary to test whether the observed difference in model fit is statistically significant.
+
+The following hypothesis were stated:
+
+The Null Hypothesis: reduced model is true.
+The Alternative Hypothesis: reduced model is false.
+
+```{r}
+
+#final model
+final.model <- glm(formula = Survived ~ Salutation + Pclass + SibSp + Parch + Fare + Age, 
+                   family = binomial(link = "logit"), data = data)
+summary(final.model)
+
+#reduced model with fewer parameters
+model2 <- glm(formula = Survived ~ Salutation + Pclass + SibSp + Parch + Fare,
+              family = binomial(link = "logit"), data = data)
+
+model3 <- glm(formula = Survived ~ Salutation + Pclass + SibSp,
+              family = binomial(link = "logit"), data = data)
+
+#Likelihood Ratio Test
+anova(final.model, model2, test ="Chisq")
+anova(final.model, model3, test ="Chisq")
+
+```
+
+The results of Likelihood Ratio Test shows that null hypothesis is rejected (as p-value is less than significance level of 5%). It would provide evidence against the reduced model in favor of the final model.
+
+b. Deviance analysis.
+
+The residual deviance, that shows how well the response is predicted by the model when the predictors are included, was used to test whether logistic regression model provides an adequate fit for the data or not. 
+
+The following hypothesis were stated:
+
+The Null Hypothesis: logistic regression model provides an adequate fit for the data.
+The Alternative Hypothesis: logistic regression model doesn’t provide an adequate fit for the data.
+
+
+```{r}
+
+#residual deviance test
+p_value = 1 - pchisq(final.model$deviance,final.model$df.residual)
+p_value
+
+```
+
+As p-value is a little bit greater than the significance level of 5% the null hypothesis is accepted. It suggests that the fitted values are not significantly different from the observed values.
+
+c. Pseudo R^2 Test.
+
+Unlike linear regression with ordinary least squares estimation, there is no R-squire statistic, which explains the proportion of variance in the dependent variable that is explained by the predictors. However, there are a number of pseudo R2-squire metrics that could be of value. Most notable is McFadden’s R-squire. It measures ranges from 0 to just less than 1, with values closer to zero indicating that the model has no predictive power.
+
+```{r}
+
+#Pseudo R^2 Test
+pR2(final.model)
+
+```
+
+The results of the McFadden’s R-squire test shows that the model has a quite strong predictive power since the value of r2CU is close to 1 (r2CU equals to 0.8139615).
+
+d. Hosmer-Lemeshow Test.
+
+Another approach to determining the goodness of fit is through the Homer-Lemeshow statistics, which is computed on data after the observations have been segmented into groups based on having similar predicted probabilities. It examines whether the observed proportions of events are similar to the predicted probabilities of occurrence in subgroups of the data set using a Pearson chi square test.
+
+The following hypothesis were stated:
+
+The Null Hypothesis: there is a good fit of the model.
+The Alternative Hypothesis: there is a poor fit of the model.
+
+```{r}
+
+#Hosmer-Lemeshow Test
+hoslem.test(data$Survived, fitted(final.model), g=10)
+
+```
+
+Since p-vale is than significance level of 5% the null hypothesis is accepted.  Hosmer-Lemeshow Test proves a good fit to the model.
+
+Predict 'Survived' class for testing and training data sets.
+
+```{r}
+
+#create a new variable 'probability'
+data$probability <- c()
+data_testing$probability <- c()
+
+#calculate logit function
+logit_p <- 0.8597*data$Pclass_Middle + 1.5757*data$Pclass_Upper -0.6767*data$SibSp - 0.4269*data$Parch + 0.5131*data$Fare+ 2.0799*data$Age
+
+#logit_p_testing <- 0.8597*data$Pclass_Middle + 1.5757*data$Pclass_Upper -0.6767*data$SibSp - 0.4269*data$Parch + 0.5131*data$Fare+ 2.0799*data$Age
+
+#calculate probability
+data$probability <- exp(1)^logit_p/(1+exp(1)^logit_p)
+#data_testing$probability <- exp(1)^logit_p_testing/(1+exp(1)^logit_p_testing)
+head(data)
+
+#create a new variable that specifies predicted class
+#data_testing$target_pred <-c()
+head(data_testing)
+
+#calculate probability
+data = within(data, {
+    Survived_pred = ifelse(data$probability < 0.5, 0, 1)
+ })
+
+#data_testing = within(data_testing, {
+#    target_pred = ifelse(data_testing$probability < 0.5, 0, 1)
+# })
+
+#head(data_testing)
+
+#export testing data file with predicted class
+#write.table(data_testing, file = "/Users/olga/downloads/data_testing.csv",append = FALSE)
+
+```
+
+Calculate Classification Metrics.
+
+The table below displays values of classification metrics that were generated by custom functions discussed in the previous sections.
+
+```{r}
+
+#create confusion matrix
+confusion_matrix <- table("Predicted" = data$Survived_pred, "Actual" = data$Survived)
+confusion_matrix
+
+#calculate true positive
+TP <- confusion_matrix[4]
+
+#calculate true negative
+TN <- confusion_matrix[1]
+
+#calculate false negative
+FN <- confusion_matrix[2]
+
+#calculate false positive
+FP <- confusion_matrix[3]
+
+#calculate accuracy
+accuracy <- (confusion_matrix[1,1] + confusion_matrix[2,2])/nrow(data)
+accuracy
+
+#calculate accuracy classification error rate
+classification_error_rate = (FP + FN)/(TP + FP + TN + FN)
+classification_error_rate
+
+#calculate precision
+precision = TP/(TP + FP)
+precision
+
+#calculate sensitivity
+sensitivity = TP/(TP + FN)
+sensitivity
+
+#calculate specificity
+specificity <- TN/(TN + FP)
+specificity
+
+#calculate F1 score
+F1_score <- (2*precision*sensitivity)/(precision + sensitivity)
+F1_score
+
+
+roc.val <- roc(Survived~probability, data)
+plot(roc.val, main="pROC package ROC plot") 
+roc.val$auc
+
+```
+
